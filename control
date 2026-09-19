@@ -1,0 +1,9 @@
+Package: com.ioscontrol.safarihttp
+Name: IOSControl Safari HTTP Bridge
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Localhost-only IOSControl bridge for the active MobileSafari page
+Maintainer: IOSControl
+Author: IOSControl
+Section: Tweaks
+Depends: firmware (>= 15.0), ellekit (>= 1.0)
