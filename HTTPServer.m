@@ -204,20 +204,21 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
 }
 
 - (void)run {
-    ICHTLog(@"[HTTP] worker starting");
+    ICHTLog(@"[HTTP] start");
     _listenFD = socket(AF_INET, SOCK_STREAM, 0);
-    if (_listenFD < 0) { ICHTLog(@"[HTTP] socket failed %@", ICHTErrno()); return; }
-    ICHTLog(@"[HTTP] socket created");
+    if (_listenFD < 0) { ICHTLog(@"[HTTP] socket FAILED %@", ICHTErrno()); return; }
+    ICHTLog(@"[HTTP] socket OK");
     int one = 1;
     if (setsockopt(_listenFD, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) ICHTLog(@"[HTTP] SO_REUSEADDR failed %@", ICHTErrno());
     struct sockaddr_in address = {0};
     address.sin_family = AF_INET;
     address.sin_port = htons(17891);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(_listenFD, (struct sockaddr *)&address, sizeof(address)) != 0) { ICHTLog(@"[HTTP] bind failed %@", ICHTErrno()); close(_listenFD); return; }
+    if (bind(_listenFD, (struct sockaddr *)&address, sizeof(address)) != 0) { ICHTLog(@"[HTTP] bind FAILED %@", ICHTErrno()); close(_listenFD); return; }
     ICHTLog(@"[HTTP] bind OK");
-    if (listen(_listenFD, 8) != 0) { ICHTLog(@"[HTTP] listen failed %@", ICHTErrno()); close(_listenFD); return; }
+    if (listen(_listenFD, 8) != 0) { ICHTLog(@"[HTTP] listen FAILED %@", ICHTErrno()); close(_listenFD); return; }
     ICHTLog(@"[HTTP] listen OK");
+    ICHTLog(@"[HTTP] accept loop started");
     for (;;) {
         int client = accept(_listenFD, NULL, NULL);
         if (client < 0) { ICHTLog(@"[HTTP] accept failed %@", ICHTErrno()); continue; }
