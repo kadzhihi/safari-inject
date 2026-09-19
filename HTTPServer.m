@@ -159,11 +159,12 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
     }
     NSUInteger contentLength = 0;
     NSString *contentLengthValue = headers[@"content-length"];
-    if ([requestLine[0] isEqual:@"POST"] && !contentLengthValue.length) { *status = 400; *errorResponse = @{ @"ok": @NO, @"error": @"MISSING_CONTENT_LENGTH" }; return NO; }
-    if (contentLengthValue.length) {
+    if ([requestLine[0] isEqual:@"POST"] && !contentLengthValue) { *status = 400; *errorResponse = @{ @"ok": @NO, @"error": @"MISSING_CONTENT_LENGTH" }; return NO; }
+    if (contentLengthValue) {
         NSCharacterSet *nonDigits = [NSCharacterSet decimalDigitCharacterSet].invertedSet;
-        if ([contentLengthValue rangeOfCharacterFromSet:nonDigits].location != NSNotFound || contentLengthValue.unsignedLongLongValue > ICHTMaxBodyBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"INVALID_OR_TOO_LARGE_CONTENT_LENGTH" }; return NO; }
-        contentLength = (NSUInteger)contentLengthValue.unsignedLongLongValue;
+        unsigned long long parsedContentLength = [contentLengthValue unsignedLongLongValue];
+        if (!contentLengthValue.length || [contentLengthValue rangeOfCharacterFromSet:nonDigits].location != NSNotFound || parsedContentLength > ICHTMaxBodyBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"INVALID_OR_TOO_LARGE_CONTENT_LENGTH" }; return NO; }
+        contentLength = (NSUInteger)parsedContentLength;
     }
     NSUInteger bodyOffset = headerRange.location + separator.length;
     while (request.length - bodyOffset < contentLength) {
