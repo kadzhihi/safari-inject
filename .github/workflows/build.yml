@@ -9,40 +9,128 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - name: Install packaging tools
-        run: brew install dpkg
-      - name: Set up Theos
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Theos
+        uses: waruhachi/theos-action@v2.4.6
+        with:
+          # This action is the workflow's only Theos and SDK setup path.
+          libgcuniversal: 'false'
+          altlist: 'false'
+
+      - name: Validate project files exist
         run: |
-          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
-          git clone --depth 1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
-          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-      - name: Build Dopamine rootless package with both slices
+          echo "=== VALIDATING PROJECT FILES ==="
+          required_files=(
+            "Makefile"
+            "control"
+            "IOSControlSafariHTTP.plist"
+            "Tweak.xm"
+            "Diagnostics.h"
+            "Diagnostics.m"
+            "HTTPServer.h"
+            "HTTPServer.m"
+            "SafariPageFinder.h"
+            "SafariPageFinder.m"
+            "JavaScriptEvaluator.h"
+            "JavaScriptEvaluator.m"
+            "ioscontrol_safari_test.lua"
+            ".github/workflows/build.yml"
+          )
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::Required file '$file' is missing!"
+              exit 1
+            fi
+            echo "  [OK] $file"
+          done
+
+      - name: Ensure packaging tools (dpkg)
         run: |
-          make clean package FINALPACKAGE=1
-      - name: Verify package architecture and FAT dylib
+          if ! command -v dpkg-deb &> /dev/null; then
+            echo "dpkg-deb missing, installing via Homebrew..."
+            brew install dpkg
+          else
+            echo "dpkg-deb available at: $(which dpkg-deb)"
+          fi
+
+      - name: Build Dopamine rootless package
+        run: |
+          echo "=== BUILDING TWEAK PACKAGE ==="
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Verify package fields and arm64 + arm64e architectures
         shell: bash
         run: |
           set -euo pipefail
+
           deb=$(find packages -maxdepth 1 -name '*.deb' -print -quit)
-          test -n "$deb"
-          echo "=== PACKAGE ARCHITECTURE ==="
+          if [ -z "$deb" ]; then
+            echo "::error::No .deb package found in packages/ directory!"
+            exit 1
+          fi
+          echo "Found Debian package: $deb"
+
+          echo "=== VERIFY CONTROL FIELDS ==="
+          pkg_name=$(dpkg-deb -f "$deb" Package)
+          pkg_ver=$(dpkg-deb -f "$deb" Version)
           pkg_arch=$(dpkg-deb -f "$deb" Architecture)
-          echo "Package Architecture: $pkg_arch"
-          test "$pkg_arch" = "iphoneos-arm64"
+          pkg_deps=$(dpkg-deb -f "$deb" Depends)
+
+          echo "Package:      $pkg_name"
+          echo "Version:      $pkg_ver"
+          echo "Architecture: $pkg_arch"
+          echo "Depends:      $pkg_deps"
+
+          if [ -z "$pkg_name" ]; then
+            echo "::error::Package field is missing or empty!"
+            exit 1
+          fi
+          if [ -z "$pkg_ver" ]; then
+            echo "::error::Version field is missing or empty!"
+            exit 1
+          fi
+          if [ "$pkg_arch" != "iphoneos-arm64" ]; then
+            echo "::error::Expected Architecture 'iphoneos-arm64', but got '$pkg_arch'!"
+            exit 1
+          fi
+          if [ -z "$pkg_deps" ]; then
+            echo "::error::Depends field is missing or empty!"
+            exit 1
+          fi
+
+          echo "=== VERIFY DYLIB ARCHITECTURES ==="
           stage=$(mktemp -d)
           dpkg-deb -x "$deb" "$stage"
           dylib=$(find "$stage" -name 'IOSControlSafariHTTP.dylib' -print -quit)
-          test -n "$dylib"
-          echo "=== LIPO VERIFICATION ==="
+          if [ -z "$dylib" ]; then
+            echo "::error::IOSControlSafariHTTP.dylib not found inside .deb package payload!"
+            exit 1
+          fi
+
+          echo "Inspecting binary: $dylib"
           lipo -info "$dylib"
           archs=$(lipo -archs "$dylib")
           echo "lipo -archs IOSControlSafariHTTP.dylib: $archs"
-          grep -qw arm64 <<<"$archs"
-          grep -qw arm64e <<<"$archs"
+
+          has_arm64=false
+          has_arm64e=false
+          if grep -qw arm64 <<<"$archs"; then has_arm64=true; fi
+          if grep -qw arm64e <<<"$archs"; then has_arm64e=true; fi
+
+          if [ "$has_arm64" != "true" ] || [ "$has_arm64e" != "true" ]; then
+            echo "::error::Dylib is missing required architectures! Expected 'arm64' and 'arm64e', but got: $archs"
+            exit 1
+          fi
+          echo "SUCCESS: Both arm64 and arm64e slices verified in dylib."
+
           echo "=== PACKAGE CONTENTS ==="
           dpkg-deb -c "$deb"
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
         with:
           name: IOSControlSafariHTTP-rootless-deb
           path: packages/*.deb
+          if-no-files-found: error
