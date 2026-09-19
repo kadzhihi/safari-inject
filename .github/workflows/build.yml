@@ -1,1 +1,48 @@
+name: Build IOSControl Safari HTTP
 
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packaging tools
+        run: brew install dpkg
+      - name: Set up Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          git clone --depth 1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+      - name: Build Dopamine rootless package with both slices
+        run: |
+          make clean package FINALPACKAGE=1
+      - name: Verify package architecture and FAT dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb=$(find packages -maxdepth 1 -name '*.deb' -print -quit)
+          test -n "$deb"
+          echo "=== PACKAGE ARCHITECTURE ==="
+          pkg_arch=$(dpkg-deb -f "$deb" Architecture)
+          echo "Package Architecture: $pkg_arch"
+          test "$pkg_arch" = "iphoneos-arm64"
+          stage=$(mktemp -d)
+          dpkg-deb -x "$deb" "$stage"
+          dylib=$(find "$stage" -name 'IOSControlSafariHTTP.dylib' -print -quit)
+          test -n "$dylib"
+          echo "=== LIPO VERIFICATION ==="
+          lipo -info "$dylib"
+          archs=$(lipo -archs "$dylib")
+          echo "lipo -archs IOSControlSafariHTTP.dylib: $archs"
+          grep -qw arm64 <<<"$archs"
+          grep -qw arm64e <<<"$archs"
+          echo "=== PACKAGE CONTENTS ==="
+          dpkg-deb -c "$deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IOSControlSafariHTTP-rootless-deb
+          path: packages/*.deb
