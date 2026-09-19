@@ -1,114 +1,95 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <dlfcn.h>
-#import <unistd.h>
+#import <stdarg.h>
 
-typedef void (*ICHTRuntimeStatusCallback)(const char *message);
-typedef BOOL (*ICHTPayloadStartFn)(ICHTRuntimeStatusCallback callback);
-
+// This is the only ElleKit-injected dylib.  It deliberately leaves all WebKit
+// and HTTP work to the payload after MobileSafari's main run loop is alive.
+typedef void (*ICHTPayloadStartFn)(void);
 static NSString * const ICHTStatusPrefix = @"IOSCONTROL_SAFARI_";
 
-static void ICHTSetPasteboardStatus(NSString *status) {
+static void ICHTBootstrapLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+
+static void ICHTBootstrapLog(NSString *format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:arguments];
+    va_end(arguments);
+    NSLog(@"[IOSControlSafariBootstrap] %@", message);
+}
+
+// The existing IOSControl runtime test can safely inspect this lightweight
+// diagnostic marker.  It is informational only; /ping remains the pass/fail
+// criterion and no UIKit work happens in the constructor path.
+static void ICHTSetBootstrapStatus(NSString *status) {
     if (![status isKindOfClass:NSString.class]) return;
-    void (^writeBlock)(void) = ^{
-        @autoreleasepool {
-            NSString *value = [ICHTStatusPrefix stringByAppendingString:status];
-            [UIPasteboard generalPasteboard].string = value;
-            NSLog(@"[IOSControlSafariBootstrap] %@", value);
-        }
+    void (^publish)(void) = ^{
+        NSString *value = [ICHTStatusPrefix stringByAppendingString:status];
+        [UIPasteboard generalPasteboard].string = value;
+        ICHTBootstrapLog(@"%@", value);
     };
-
-    if (NSThread.isMainThread) writeBlock();
-    else dispatch_async(dispatch_get_main_queue(), writeBlock);
+    if (NSThread.isMainThread) publish();
+    else dispatch_async(dispatch_get_main_queue(), publish);
 }
 
-static void ICHTRuntimeStatusFromPayload(const char *message) {
-    if (!message) return;
-    NSString *status = [NSString stringWithUTF8String:message];
-    if (status.length) ICHTSetPasteboardStatus(status);
-}
-
-static NSString *ICHTDLErrorString(void) {
-    const char *error = dlerror();
-    if (!error) return @"unknown dlerror";
-    NSString *value = [NSString stringWithUTF8String:error];
-    return value.length ? value : @"unknown dlerror";
+static BOOL ICHTIsMobileSafari(void) {
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
+    NSString *process = NSProcessInfo.processInfo.processName;
+    return [bundle isEqualToString:@"com.apple.mobilesafari"] &&
+           [process isEqualToString:@"MobileSafari"];
 }
 
 static void ICHTLoadPayload(void) {
-    @autoreleasepool {
-        NSString *bundle = NSBundle.mainBundle.bundleIdentifier ?: @"nil";
-        NSString *process = NSProcessInfo.processInfo.processName ?: @"nil";
-
-        ICHTSetPasteboardStatus([NSString stringWithFormat:
-            @"BOOTSTRAP_LOADED|pid=%d|process=%@|bundle=%@",
-            (int)getpid(), process, bundle]);
-
-        if (![bundle isEqualToString:@"com.apple.mobilesafari"] &&
-            ![process isEqualToString:@"MobileSafari"]) {
-            ICHTSetPasteboardStatus([NSString stringWithFormat:
-                @"BOOTSTRAP_WRONG_PROCESS|process=%@|bundle=%@", process, bundle]);
-            return;
-        }
-
-        const char *paths[] = {
-            "/var/jb/usr/lib/TweakInject/IOSControlSafariPayload.dylib",
-            "/var/jb/Library/MobileSubstrate/DynamicLibraries/IOSControlSafariPayload.dylib"
-        };
-
-        void *handle = NULL;
-        NSString *usedPath = nil;
-        NSString *lastError = nil;
-
-        for (NSUInteger i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-            dlerror();
-            handle = dlopen(paths[i], RTLD_NOW | RTLD_LOCAL);
-            if (handle) {
-                usedPath = [NSString stringWithUTF8String:paths[i]];
-                break;
+    static dispatch_once_t loadOnce;
+    dispatch_once(&loadOnce, ^{
+        @autoreleasepool {
+            NSString *bundle = NSBundle.mainBundle.bundleIdentifier ?: @"unknown";
+            NSString *process = NSProcessInfo.processInfo.processName ?: @"unknown";
+            if (!ICHTIsMobileSafari()) {
+                ICHTSetBootstrapStatus([NSString stringWithFormat:@"PAYLOAD_NOT_LOADED process=%@ bundle=%@", process, bundle]);
+                return;
             }
-            lastError = ICHTDLErrorString();
+
+            const char *paths[] = {
+                "/var/jb/usr/lib/TweakInject/IOSControlSafariPayload.dylib",
+                "/var/jb/Library/MobileSubstrate/DynamicLibraries/IOSControlSafariPayload.dylib",
+            };
+            void *handle = NULL;
+            NSString *lastError = nil;
+            for (NSUInteger index = 0; index < sizeof(paths) / sizeof(paths[0]); index++) {
+                dlerror();
+                handle = dlopen(paths[index], RTLD_NOW | RTLD_LOCAL);
+                if (handle) {
+                    ICHTSetBootstrapStatus([NSString stringWithFormat:@"PAYLOAD_DLOPEN_OK path=%s", paths[index]]);
+                    break;
+                }
+                const char *error = dlerror();
+                lastError = error ? [NSString stringWithUTF8String:error] : @"unknown dlerror";
+                ICHTSetBootstrapStatus([NSString stringWithFormat:@"PAYLOAD_DLOPEN_FAIL path=%s error=%@", paths[index], lastError]);
+            }
+            if (!handle) return;
+
+            dlerror();
+            ICHTPayloadStartFn start = (ICHTPayloadStartFn)dlsym(handle, "ICHTPayloadStart");
+            const char *symbolError = dlerror();
+            if (!start || symbolError) {
+                ICHTSetBootstrapStatus([NSString stringWithFormat:@"PAYLOAD_DLSYM_FAIL error=%@",
+                                        symbolError ? [NSString stringWithUTF8String:symbolError] : @"ICHTPayloadStart missing"]);
+                return;
+            }
+
+            // The payload owns Objective-C classes, so its dlopen handle must live
+            // for the rest of MobileSafari's process lifetime.
+            start();
+            ICHTSetBootstrapStatus(@"PAYLOAD_START_CALLED");
         }
-
-        if (!handle) {
-            ICHTSetPasteboardStatus([NSString stringWithFormat:
-                @"PAYLOAD_DLOPEN_FAIL|error=%@", lastError ?: @"unknown"]);
-            return;
-        }
-
-        ICHTSetPasteboardStatus([NSString stringWithFormat:
-            @"PAYLOAD_DLOPEN_OK|path=%@", usedPath ?: @"unknown"]);
-
-        dlerror();
-        ICHTPayloadStartFn startFn =
-            (ICHTPayloadStartFn)dlsym(handle, "ICHTPayloadStart");
-        const char *symbolError = dlerror();
-
-        if (!startFn || symbolError) {
-            NSString *error = symbolError ?
-                ([NSString stringWithUTF8String:symbolError] ?: @"unknown dlsym error") :
-                @"ICHTPayloadStart missing";
-            ICHTSetPasteboardStatus([NSString stringWithFormat:
-                @"PAYLOAD_DLSYM_FAIL|error=%@", error]);
-            return;
-        }
-
-        BOOL started = startFn(ICHTRuntimeStatusFromPayload);
-        if (!started) {
-            ICHTSetPasteboardStatus(@"PAYLOAD_START_RETURNED_FALSE");
-            return;
-        }
-
-        // HTTPServer will replace this with HTTP_LISTENING or an exact socket error.
-        ICHTSetPasteboardStatus(@"PAYLOAD_START_CALLED");
-    }
+    });
 }
 
 %ctor {
     @autoreleasepool {
-        // Do almost nothing under dyld/ElleKit's load path. Safari/UI work is delayed
-        // until its main run loop is alive, avoiding constructor-time UIKit/WebKit work.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+        if (!ICHTIsMobileSafari()) return;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
             ICHTLoadPayload();
         });

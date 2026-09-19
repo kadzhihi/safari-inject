@@ -1,5 +1,4 @@
 #import "HTTPServer.h"
-#import "Payload.h"
 #import "Diagnostics.h"
 #import "JavaScriptEvaluator.h"
 #import "SafariPageFinder.h"
@@ -206,13 +205,11 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
 
 - (void)run {
     ICHTLog(@"[HTTP] start");
-    ICHTReportRuntimeStatus(@"HTTP_START");
 
     _listenFD = socket(AF_INET, SOCK_STREAM, 0);
     if (_listenFD < 0) {
         NSString *detail = ICHTErrno();
         ICHTLog(@"[HTTP] socket FAILED %@", detail);
-        ICHTReportRuntimeStatus([NSString stringWithFormat:@"HTTP_SOCKET_FAIL|%@", detail]);
         return;
     }
     ICHTLog(@"[HTTP] socket OK");
@@ -245,8 +242,6 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
     }
 
     if (!bound) {
-        ICHTReportRuntimeStatus([NSString stringWithFormat:
-            @"HTTP_BIND_FAIL|%@", lastBindError ?: @"unknown"]);
         close(_listenFD);
         _listenFD = -1;
         return;
@@ -256,14 +251,12 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
     if (listen(_listenFD, 8) != 0) {
         NSString *detail = ICHTErrno();
         ICHTLog(@"[HTTP] listen FAILED %@", detail);
-        ICHTReportRuntimeStatus([NSString stringWithFormat:@"HTTP_LISTEN_FAIL|%@", detail]);
         close(_listenFD);
         _listenFD = -1;
         return;
     }
 
     ICHTLog(@"[HTTP] LISTENING 127.0.0.1:17891");
-    ICHTReportRuntimeStatus(@"HTTP_LISTENING|127.0.0.1:17891");
     ICHTLog(@"[HTTP] accept loop started");
 
     for (;;) {

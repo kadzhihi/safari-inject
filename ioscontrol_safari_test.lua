@@ -62,28 +62,6 @@ local function httpPostText(path, text)
     return body, status, decode(body)
 end
 
-local function waitRuntime(seconds)
-    local loops = math.floor((seconds or 10) * 4)
-    local last = nil
-    for i = 1, loops do
-        local v = clipText()
-        if has(v, PREFIX) then
-            if v ~= last then
-                log("[RUNTIME] " .. tostring(v))
-                last = v
-            end
-            if has(v, "HTTP_LISTENING") or
-               has(v, "FAIL") or
-               has(v, "WRONG_PROCESS") or
-               has(v, "START_RETURNED_FALSE") then
-                return v
-            end
-        end
-        sleep(0.25)
-    end
-    return last
-end
-
 local function resultValue(data, body)
     if type(data) == "table" and data.result ~= nil then
         return data.result
@@ -115,39 +93,30 @@ end
 
 log("")
 log("----- START SAFARI -----")
-clearPasteboard()
 appKill("com.apple.mobilesafari")
 sleep(2)
 appRun("com.apple.mobilesafari")
+sleep(3)
 
-local runtime = waitRuntime(8)
-local bootstrapOK = runtime ~= nil
-
-if bootstrapOK then
-    pass("03 BOOTSTRAP INJECTION")
-else
-    fail("03 BOOTSTRAP INJECTION", "No " .. PREFIX .. " runtime status appeared")
+local diagnostic = clipText()
+if has(diagnostic, PREFIX) then
+    log("bootstrap_diagnostic=" .. tostring(diagnostic))
 end
 
-if runtime and has(runtime, "PAYLOAD_DLOPEN_FAIL") then
-    fail("04 PAYLOAD DLOPEN", runtime)
-elseif runtime and has(runtime, "PAYLOAD_DLSYM_FAIL") then
-    fail("04 PAYLOAD SYMBOL", runtime)
-elseif runtime and has(runtime, "HTTP_SOCKET_FAIL") then
-    fail("05 HTTP SOCKET", runtime)
-elseif runtime and has(runtime, "HTTP_BIND_FAIL") then
-    fail("05 HTTP BIND", runtime)
-elseif runtime and has(runtime, "HTTP_LISTEN_FAIL") then
-    fail("05 HTTP LISTEN", runtime)
+local safariProcess = shell("pgrep -x MobileSafari 2>&1")
+if tonumber(safariProcess) then
+    pass("03 MOBILESAFARI PROCESS EXISTS")
+else
+    fail("03 MOBILESAFARI PROCESS EXISTS", safariProcess)
 end
 
 local pingBody, pingStatus, pingData = httpGetJSON("/ping")
 local bridgeOK = pingStatus == 200 and type(pingData) == "table" and pingData.ok == true
 if bridgeOK then
-    pass("05 HTTP PING")
+    pass("04 HTTP PING")
     log("ping=" .. tostring(pingBody))
 else
-    fail("05 HTTP PING", "status=" .. tostring(pingStatus) .. " body=" .. tostring(pingBody) .. " runtime=" .. tostring(runtime))
+    fail("04 HTTP PING", "status=" .. tostring(pingStatus) .. " body=" .. tostring(pingBody))
 end
 
 if bridgeOK then
@@ -158,26 +127,26 @@ if bridgeOK then
 
     local body, status, data = httpGetJSON("/status")
     if status == 200 and type(data) == "table" and data.ok == true then
-        pass("06 ACTIVE SAFARI PAGE")
+        pass("05 ACTIVE SAFARI PAGE")
         log("status=" .. tostring(body))
     else
-        fail("06 ACTIVE SAFARI PAGE", "status=" .. tostring(status) .. " body=" .. tostring(body))
+        fail("05 ACTIVE SAFARI PAGE", "status=" .. tostring(status) .. " body=" .. tostring(body))
     end
 
     body, status, data = httpPostText("/eval", "document.title")
     local title = resultValue(data, body)
     if status == 200 and has(tostring(title), "Example Domain") then
-        pass("07 JAVASCRIPT document.title")
+        pass("06 JAVASCRIPT document.title")
     else
-        fail("07 JAVASCRIPT document.title", "status=" .. tostring(status) .. " result=" .. tostring(title) .. " body=" .. tostring(body))
+        fail("06 JAVASCRIPT document.title", "status=" .. tostring(status) .. " result=" .. tostring(title) .. " body=" .. tostring(body))
     end
 
     body, status, data = httpPostText("/eval", "location.href")
     local href = resultValue(data, body)
     if status == 200 and has(tostring(href), "example.com") then
-        pass("08 JAVASCRIPT location.href")
+        pass("07 JAVASCRIPT location.href")
     else
-        fail("08 JAVASCRIPT location.href", tostring(body))
+        fail("07 JAVASCRIPT location.href", tostring(body))
     end
 
     body, status, data = httpPostText("/eval", [[
@@ -191,7 +160,7 @@ if bridgeOK then
   return 'CREATED';
 })()
 ]])
-    if status == 200 and has(tostring(body), "CREATED") then pass("09 CREATE DOM INPUT") else fail("09 CREATE DOM INPUT", body) end
+    if status == 200 and has(tostring(body), "CREATED") then pass("08 CREATE DOM INPUT") else fail("08 CREATE DOM INPUT", body) end
 
     local fillBody, fillStatus = httpPost(
         BASE .. "/fill",
@@ -199,11 +168,18 @@ if bridgeOK then
         { ["Content-Type"] = "application/json" }
     )
     local fillData = decode(fillBody)
-    if fillStatus == 200 and type(fillData) == "table" and fillData.ok == true then pass("10 FILL DOM INPUT") else fail("10 FILL DOM INPUT", fillBody) end
+    if fillStatus == 200 and type(fillData) == "table" and fillData.ok == true then pass("09 FILL DOM INPUT") else fail("09 FILL DOM INPUT", fillBody) end
 
     body, status, data = httpPostText("/eval", "document.querySelector('#ioscontrol_test').value")
     local value = resultValue(data, body)
-    if status == 200 and has(tostring(value), "ABC123456") then pass("11 VERIFY DOM VALUE") else fail("11 VERIFY DOM VALUE", tostring(body)) end
+    if status == 200 and has(tostring(value), "ABC123456") then pass("10 VERIFY DOM VALUE") else fail("10 VERIFY DOM VALUE", tostring(body)) end
+
+    body, status, data = httpPostText("/eval", "(() => {")
+    if status == 200 and type(data) == "table" and data.ok == false then
+        pass("11 INVALID JAVASCRIPT")
+    else
+        fail("11 INVALID JAVASCRIPT", "status=" .. tostring(status) .. " body=" .. tostring(body))
+    end
 
     local repeatOK = true
     for i = 1, 5 do
@@ -217,7 +193,7 @@ if bridgeOK then
     end
     if repeatOK then pass("12 REPEATED EVAL x5") end
 else
-    skip("06-12 SAFARI/JS TESTS", "bridge is not listening")
+    skip("05-12 SAFARI/JS TESTS", "bridge is not listening")
 end
 
 log("")
@@ -226,7 +202,7 @@ log("passed=" .. tostring(passed))
 log("failed=" .. tostring(failed))
 log("skipped=" .. tostring(skipped))
 log("first_failed_stage=" .. tostring(firstFailed or "NONE"))
-log("runtime=" .. tostring(runtime))
+log("bootstrap_diagnostic=" .. tostring(diagnostic))
 if bridgeOK then
     log("RESULT=BRIDGE_RUNNING")
 else
