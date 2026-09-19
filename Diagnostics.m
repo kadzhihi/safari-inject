@@ -32,25 +32,3 @@ NSDictionary *ICHTProcessInfo(void) {
 #endif
     };
 }
-
-void ICHTWriteInjectionMarker(void) {
-    NSDictionary *p = ICHTProcessInfo();
-    NSString *marker = [NSString stringWithFormat:
-        @"IOSCONTROL_SAFARI_LOADED\nprocess=%@\npid=%@\nbundle=%@\narchitecture=%@\ntimestamp=%@\n",
-        p[@"process"], p[@"pid"], p[@"bundle"], p[@"architecture"], [NSDate date]];
-
-    // MobileSafari's own writable container Caches directory.
-    NSString *cacheDir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
-    if (cacheDir.length) {
-        NSString *containerPath = [cacheDir stringByAppendingPathComponent:@"ioscontrol_safari_loaded.txt"];
-        NSError *err = nil;
-        if ([marker writeToFile:containerPath atomically:YES encoding:NSUTF8StringEncoding error:&err]) {
-            ICHTLog(@"[CTOR] marker written to container Caches: %@", containerPath);
-        } else {
-            ICHTLog(@"[CTOR] marker write failed at %@: %@", containerPath, err.localizedDescription);
-        }
-    } else {
-        ICHTLog(@"[CTOR] no container Caches directory found");
-    }
-
-}

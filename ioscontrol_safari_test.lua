@@ -1,105 +1,237 @@
--- IOSControl Lua 5.4: definitive MobileSafari ctor + localhost bridge probe.
--- Purpose: separate "tweak did not load" from "tweak loaded but HTTP failed".
+-- IOSControl Lua 5.4
+-- One-shot runtime test for IOSControl Safari Bridge v0.2.0.
+-- It identifies the exact stage: bootstrap injection -> payload dlopen -> socket -> JS.
 
-local BASE_URL = "http://127.0.0.1:17891"
-local CTOR_PREFIX = "IOSCONTROL_SAFARI_CTOR_OK"
+local BASE = "http://127.0.0.1:17891"
+local PREFIX = "IOSCONTROL_SAFARI_"
+local TEST_URL = "https://example.com"
+local TMP_NAME = "__ioscontrol_safari_v2_tmp.txt"
+local TMP_PATH = "/var/mobile/Library/IOSControl/Scripts/" .. TMP_NAME
 
-local function contains(s, needle)
+local passed, failed, skipped = 0, 0, 0
+local firstFailed = nil
+
+local function has(s, needle)
     return type(s) == "string" and string.find(s, needle, 1, true) ~= nil
 end
 
-local function checkPing(label)
-    local body, status = httpGet(BASE_URL .. "/ping")
-    log(label .. " status=" .. tostring(status) .. " body=" .. tostring(body))
-    return status == 200, body, status
+local function pass(name)
+    passed = passed + 1
+    log("[PASS] " .. name)
 end
 
-local function waitForClipboardMarker(seconds)
-    local loops = math.floor((seconds or 6) * 2)
-    for i = 1, loops do
-        local value = clipText()
-        if contains(value, CTOR_PREFIX) then
-            return value
-        end
-        sleep(0.5)
-    end
+local function fail(name, detail)
+    failed = failed + 1
+    if not firstFailed then firstFailed = name end
+    log("[FAIL] " .. name)
+    if detail then log("       " .. tostring(detail)) end
+end
+
+local function skip(name, detail)
+    skipped = skipped + 1
+    log("[SKIP] " .. name)
+    if detail then log("       " .. tostring(detail)) end
+end
+
+local function shell(cmd)
+    execute(cmd .. " > " .. TMP_PATH .. " 2>&1")
+    sleep(0.2)
+    local out = readFile(TMP_NAME)
+    execute("rm -f " .. TMP_PATH)
+    return out
+end
+
+local function decode(body)
+    if not body or body == "" then return nil end
+    local ok, value = pcall(jsonDecode, body)
+    if ok then return value end
     return nil
 end
 
-local function waitForPing(seconds)
-    local loops = math.floor((seconds or 5) * 2)
-    local lastBody = nil
-    local lastStatus = nil
-    for i = 1, loops do
-        local body, status = httpGet(BASE_URL .. "/ping")
-        lastBody = body
-        lastStatus = status
-        if status == 200 then
-            return true, body, status
-        end
-        sleep(0.5)
-    end
-    return false, lastBody, lastStatus
+local function httpGetJSON(path)
+    local body, status = httpGet(BASE .. path)
+    return body, status, decode(body)
 end
 
-log("===== SAFARI CTOR + BRIDGE DEFINITIVE TEST =====")
+local function httpPostText(path, text)
+    local body, status = httpPost(
+        BASE .. path,
+        text or "",
+        { ["Content-Type"] = "text/plain; charset=utf-8" }
+    )
+    return body, status, decode(body)
+end
 
--- Do not let an old marker create a false PASS.
+local function waitRuntime(seconds)
+    local loops = math.floor((seconds or 10) * 4)
+    local last = nil
+    for i = 1, loops do
+        local v = clipText()
+        if has(v, PREFIX) then
+            if v ~= last then
+                log("[RUNTIME] " .. tostring(v))
+                last = v
+            end
+            if has(v, "HTTP_LISTENING") or
+               has(v, "FAIL") or
+               has(v, "WRONG_PROCESS") or
+               has(v, "START_RETURNED_FALSE") then
+                return v
+            end
+        end
+        sleep(0.25)
+    end
+    return last
+end
+
+local function resultValue(data, body)
+    if type(data) == "table" and data.result ~= nil then
+        return data.result
+    end
+    return body
+end
+
+log("===== IOSCONTROL SAFARI V2 RUNTIME TEST =====")
+
+execute("rm -f " .. TMP_PATH)
+
+log("")
+log("----- PACKAGE -----")
+local pkg = shell("dpkg-query -W -f='${Version}\\n' com.ioscontrol.safarihttp 2>&1")
+log("installed_version=" .. tostring(pkg))
+if has(pkg, "0.2.0-1") then pass("01 PACKAGE VERSION") else fail("01 PACKAGE VERSION", pkg) end
+
+local files = shell(
+    "ls -l /var/jb/usr/lib/TweakInject/IOSControlSafariBootstrap.dylib " ..
+    "/var/jb/usr/lib/TweakInject/IOSControlSafariBootstrap.plist " ..
+    "/var/jb/usr/lib/TweakInject/IOSControlSafariPayload.dylib " ..
+    "/var/jb/usr/lib/TweakInject/IOSControlSafariPayload.plist 2>&1"
+)
+if has(files, "IOSControlSafariBootstrap.dylib") and has(files, "IOSControlSafariPayload.dylib") then
+    pass("02 BOOTSTRAP + PAYLOAD INSTALLED")
+else
+    fail("02 BOOTSTRAP + PAYLOAD INSTALLED", files)
+end
+
+log("")
+log("----- START SAFARI -----")
 clearPasteboard()
-sleep(0.3)
-
-log("[01] Kill MobileSafari")
 appKill("com.apple.mobilesafari")
 sleep(2)
-
-log("[02] Launch MobileSafari explicitly")
 appRun("com.apple.mobilesafari")
 
--- Check ctor proof immediately, before navigation/background timing can interfere.
-local ctorMarker = waitForClipboardMarker(6)
-local injectionOK = ctorMarker ~= nil
+local runtime = waitRuntime(8)
+local bootstrapOK = runtime ~= nil
 
-if injectionOK then
-    log("[PASS] 03 CTOR / INJECTION")
-    log("clipboard=" .. tostring(ctorMarker))
+if bootstrapOK then
+    pass("03 BOOTSTRAP INJECTION")
 else
-    log("[FAIL] 03 CTOR / INJECTION")
-    log("clipboard=" .. tostring(clipText()))
+    fail("03 BOOTSTRAP INJECTION", "No " .. PREFIX .. " runtime status appeared")
 end
 
--- Also test HTTP immediately after launch.
-local bridgeOK, pingBody, pingStatus = waitForPing(5)
+if runtime and has(runtime, "PAYLOAD_DLOPEN_FAIL") then
+    fail("04 PAYLOAD DLOPEN", runtime)
+elseif runtime and has(runtime, "PAYLOAD_DLSYM_FAIL") then
+    fail("04 PAYLOAD SYMBOL", runtime)
+elseif runtime and has(runtime, "HTTP_SOCKET_FAIL") then
+    fail("05 HTTP SOCKET", runtime)
+elseif runtime and has(runtime, "HTTP_BIND_FAIL") then
+    fail("05 HTTP BIND", runtime)
+elseif runtime and has(runtime, "HTTP_LISTEN_FAIL") then
+    fail("05 HTTP LISTEN", runtime)
+end
+
+local pingBody, pingStatus, pingData = httpGetJSON("/ping")
+local bridgeOK = pingStatus == 200 and type(pingData) == "table" and pingData.ok == true
 if bridgeOK then
-    log("[PASS] 04 HTTP AFTER APP LAUNCH")
+    pass("05 HTTP PING")
+    log("ping=" .. tostring(pingBody))
 else
-    log("[FAIL] 04 HTTP AFTER APP LAUNCH")
-end
-log("status=" .. tostring(pingStatus))
-log("body=" .. tostring(pingBody))
-
--- Navigation test is secondary. It proves whether opening a real page changes anything.
-log("[05] Open example.com")
-openURL("https://example.com")
-sleep(3)
-
-local navBridgeOK, navBody, navStatus = checkPing("[05] ping-after-navigation")
-if navBridgeOK then
-    log("[PASS] 05 HTTP AFTER NAVIGATION")
-else
-    log("[FAIL] 05 HTTP AFTER NAVIGATION")
+    fail("05 HTTP PING", "status=" .. tostring(pingStatus) .. " body=" .. tostring(pingBody) .. " runtime=" .. tostring(runtime))
 end
 
-log("===== RESULT =====")
-log("INJECTION=" .. (injectionOK and "PASS" or "FAIL"))
-log("HTTP_AFTER_LAUNCH=" .. (bridgeOK and "PASS" or "FAIL"))
-log("HTTP_AFTER_NAVIGATION=" .. (navBridgeOK and "PASS" or "FAIL"))
+if bridgeOK then
+    log("")
+    log("----- REAL SAFARI PAGE -----")
+    openURL(TEST_URL)
+    sleep(4)
 
-if injectionOK and (bridgeOK or navBridgeOK) then
-    log("NEXT=BRIDGE_ALIVE_RUN_FULL_JS_TEST")
-elseif injectionOK then
-    log("NEXT=INJECTION_CONFIRMED_FIX_HTTPSERVER_ONLY")
+    local body, status, data = httpGetJSON("/status")
+    if status == 200 and type(data) == "table" and data.ok == true then
+        pass("06 ACTIVE SAFARI PAGE")
+        log("status=" .. tostring(body))
+    else
+        fail("06 ACTIVE SAFARI PAGE", "status=" .. tostring(status) .. " body=" .. tostring(body))
+    end
+
+    body, status, data = httpPostText("/eval", "document.title")
+    local title = resultValue(data, body)
+    if status == 200 and has(tostring(title), "Example Domain") then
+        pass("07 JAVASCRIPT document.title")
+    else
+        fail("07 JAVASCRIPT document.title", "status=" .. tostring(status) .. " result=" .. tostring(title) .. " body=" .. tostring(body))
+    end
+
+    body, status, data = httpPostText("/eval", "location.href")
+    local href = resultValue(data, body)
+    if status == 200 and has(tostring(href), "example.com") then
+        pass("08 JAVASCRIPT location.href")
+    else
+        fail("08 JAVASCRIPT location.href", tostring(body))
+    end
+
+    body, status, data = httpPostText("/eval", [[
+(() => {
+  let e = document.querySelector('#ioscontrol_test');
+  if (!e) {
+    e = document.createElement('input');
+    e.id = 'ioscontrol_test';
+    document.body.appendChild(e);
+  }
+  return 'CREATED';
+})()
+]])
+    if status == 200 and has(tostring(body), "CREATED") then pass("09 CREATE DOM INPUT") else fail("09 CREATE DOM INPUT", body) end
+
+    local fillBody, fillStatus = httpPost(
+        BASE .. "/fill",
+        jsonEncode({ selector = "#ioscontrol_test", value = "ABC123456" }),
+        { ["Content-Type"] = "application/json" }
+    )
+    local fillData = decode(fillBody)
+    if fillStatus == 200 and type(fillData) == "table" and fillData.ok == true then pass("10 FILL DOM INPUT") else fail("10 FILL DOM INPUT", fillBody) end
+
+    body, status, data = httpPostText("/eval", "document.querySelector('#ioscontrol_test').value")
+    local value = resultValue(data, body)
+    if status == 200 and has(tostring(value), "ABC123456") then pass("11 VERIFY DOM VALUE") else fail("11 VERIFY DOM VALUE", tostring(body)) end
+
+    local repeatOK = true
+    for i = 1, 5 do
+        body, status, data = httpPostText("/eval", "1+1")
+        local v = resultValue(data, body)
+        if status ~= 200 or tostring(v) ~= "2" then
+            repeatOK = false
+            fail("12 REPEATED EVAL x5", "iteration=" .. tostring(i) .. " status=" .. tostring(status) .. " result=" .. tostring(v))
+            break
+        end
+    end
+    if repeatOK then pass("12 REPEATED EVAL x5") end
 else
-    log("NEXT=INJECTION_NOT_CONFIRMED_CHECK_ELLEKIT_DYLD_LOAD")
+    skip("06-12 SAFARI/JS TESTS", "bridge is not listening")
 end
 
+log("")
+log("===== FINAL SUMMARY =====")
+log("passed=" .. tostring(passed))
+log("failed=" .. tostring(failed))
+log("skipped=" .. tostring(skipped))
+log("first_failed_stage=" .. tostring(firstFailed or "NONE"))
+log("runtime=" .. tostring(runtime))
+if bridgeOK then
+    log("RESULT=BRIDGE_RUNNING")
+else
+    log("RESULT=BRIDGE_NOT_RUNNING")
+end
 log("===== END =====")
+
+execute("rm -f " .. TMP_PATH)

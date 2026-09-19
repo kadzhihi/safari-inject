@@ -1,4 +1,5 @@
 #import "HTTPServer.h"
+#import "Payload.h"
 #import "Diagnostics.h"
 #import "JavaScriptEvaluator.h"
 #import "SafariPageFinder.h"
@@ -117,7 +118,7 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
 - (NSDictionary *)routeMethod:(NSString *)method path:(NSString *)path body:(NSData *)body status:(NSInteger *)status {
     *status = 200;
     if ([method isEqual:@"GET"] && [path isEqual:@"/ping"]) {
-        NSMutableDictionary *output = [@{ @"ok": @YES, @"bridge": @"IOSControlSafariHTTP", @"version": @"0.1.0", @"port": @17891 } mutableCopy];
+        NSMutableDictionary *output = [@{ @"ok": @YES, @"bridge": @"IOSControlSafariHTTP", @"version": @"0.2.0", @"port": @17891 } mutableCopy];
         [output addEntriesFromDictionary:ICHTProcessInfo()];
         return output;
     }
@@ -205,23 +206,73 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
 
 - (void)run {
     ICHTLog(@"[HTTP] start");
+    ICHTReportRuntimeStatus(@"HTTP_START");
+
     _listenFD = socket(AF_INET, SOCK_STREAM, 0);
-    if (_listenFD < 0) { ICHTLog(@"[HTTP] socket FAILED %@", ICHTErrno()); return; }
+    if (_listenFD < 0) {
+        NSString *detail = ICHTErrno();
+        ICHTLog(@"[HTTP] socket FAILED %@", detail);
+        ICHTReportRuntimeStatus([NSString stringWithFormat:@"HTTP_SOCKET_FAIL|%@", detail]);
+        return;
+    }
     ICHTLog(@"[HTTP] socket OK");
+
     int one = 1;
-    if (setsockopt(_listenFD, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) ICHTLog(@"[HTTP] SO_REUSEADDR failed %@", ICHTErrno());
+    if (setsockopt(_listenFD, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0) {
+        ICHTLog(@"[HTTP] SO_REUSEADDR failed %@", ICHTErrno());
+    }
+#ifdef SO_NOSIGPIPE
+    if (setsockopt(_listenFD, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) != 0) {
+        ICHTLog(@"[HTTP] SO_NOSIGPIPE failed %@", ICHTErrno());
+    }
+#endif
+
     struct sockaddr_in address = {0};
     address.sin_family = AF_INET;
     address.sin_port = htons(17891);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(_listenFD, (struct sockaddr *)&address, sizeof(address)) != 0) { ICHTLog(@"[HTTP] bind FAILED %@", ICHTErrno()); close(_listenFD); return; }
-    ICHTLog(@"[HTTP] bind OK");
-    if (listen(_listenFD, 8) != 0) { ICHTLog(@"[HTTP] listen FAILED %@", ICHTErrno()); close(_listenFD); return; }
-    ICHTLog(@"[HTTP] listen OK");
+
+    BOOL bound = NO;
+    NSString *lastBindError = nil;
+    for (NSInteger attempt = 1; attempt <= 3; attempt++) {
+        if (bind(_listenFD, (struct sockaddr *)&address, sizeof(address)) == 0) {
+            bound = YES;
+            break;
+        }
+        lastBindError = ICHTErrno();
+        ICHTLog(@"[HTTP] bind attempt %ld FAILED %@", (long)attempt, lastBindError);
+        if (attempt < 3) usleep(250000);
+    }
+
+    if (!bound) {
+        ICHTReportRuntimeStatus([NSString stringWithFormat:
+            @"HTTP_BIND_FAIL|%@", lastBindError ?: @"unknown"]);
+        close(_listenFD);
+        _listenFD = -1;
+        return;
+    }
+    ICHTLog(@"[HTTP] bind OK 127.0.0.1:17891");
+
+    if (listen(_listenFD, 8) != 0) {
+        NSString *detail = ICHTErrno();
+        ICHTLog(@"[HTTP] listen FAILED %@", detail);
+        ICHTReportRuntimeStatus([NSString stringWithFormat:@"HTTP_LISTEN_FAIL|%@", detail]);
+        close(_listenFD);
+        _listenFD = -1;
+        return;
+    }
+
+    ICHTLog(@"[HTTP] LISTENING 127.0.0.1:17891");
+    ICHTReportRuntimeStatus(@"HTTP_LISTENING|127.0.0.1:17891");
     ICHTLog(@"[HTTP] accept loop started");
+
     for (;;) {
         int client = accept(_listenFD, NULL, NULL);
-        if (client < 0) { ICHTLog(@"[HTTP] accept failed %@", ICHTErrno()); continue; }
+        if (client < 0) {
+            if (errno == EINTR) continue;
+            ICHTLog(@"[HTTP] accept failed %@", ICHTErrno());
+            continue;
+        }
         [self serve:client];
     }
 }
