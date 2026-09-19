@@ -1,0 +1,12 @@
+.theos/
+packages/
+*.deb
+*.dSYM/
+build/
+.DS_Store
+*.log
+logs/
+tmp/
+*.tmp
+*.o
+*.dylib
