@@ -2,7 +2,6 @@
 #import "Diagnostics.h"
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
-#import <objc/runtime.h>
 
 static const NSUInteger ICHTMaxSelectorWalkObjects = 128;
 
@@ -26,11 +25,8 @@ static void ICHTAddControllerChain(UIViewController *controller, NSMutableArray 
 static id ICHTObjectValue(id object, NSString *selectorName) {
     SEL selector = NSSelectorFromString(selectorName);
     if (!object || ![object respondsToSelector:selector]) return nil;
-    Method method = class_getInstanceMethod([object class], selector);
-    if (!method) return nil;
-    char returnType[16] = {0};
-    method_getReturnType(method, returnType, sizeof(returnType));
-    if (returnType[0] != '@') return nil;
+    NSMethodSignature *signature = [object methodSignatureForSelector:selector];
+    if (!signature || signature.numberOfArguments != 2 || signature.methodReturnType[0] != '@') return nil;
     @try { return ((id (*)(id, SEL))objc_msgSend)(object, selector); }
     @catch (NSException *exception) {
         ICHTLog(@"[PAGE] %@ on %@ raised %@", selectorName, NSStringFromClass([object class]), exception.reason);
@@ -40,6 +36,16 @@ static id ICHTObjectValue(id object, NSString *selectorName) {
 
 static BOOL ICHTCanEvaluateJavaScript(id object) {
     return object && [object respondsToSelector:NSSelectorFromString(@"evaluateJavaScript:completionHandler:")];
+}
+
+static NSInteger ICHTEvaluatorScore(id object, Class wkWebView) {
+    NSInteger score = (wkWebView && [object isKindOfClass:wkWebView]) ? 100 : 0;
+    if ([object isKindOfClass:UIView.class]) {
+        UIView *view = object;
+        if (view.window.isKeyWindow) score += 50;
+        if (!view.hidden && view.alpha > 0) score += 10;
+    }
+    return score;
 }
 
 static NSString *ICHTStringValue(id object, NSString *selectorName) {
@@ -86,8 +92,17 @@ ICHTSafariPage *ICHTFindActiveSafariPage(NSError **error) {
         ICHTAddControllerChain(window.rootViewController, objects);
     }
     Class wkWebView = NSClassFromString(@"WKWebView");
+    id bestEvaluator = nil;
+    NSString *bestStrategy = nil;
+    NSInteger bestScore = NSIntegerMin;
     for (id object in objects) {
-        if ((wkWebView && [object isKindOfClass:wkWebView]) || ICHTCanEvaluateJavaScript(object)) return ICHTPageFromEvaluator(object, @"visible-view-tree");
+        if (!ICHTCanEvaluateJavaScript(object)) continue;
+        NSInteger score = ICHTEvaluatorScore(object, wkWebView);
+        if (!bestEvaluator || score > bestScore) {
+            bestEvaluator = object;
+            bestStrategy = @"visible-view-tree";
+            bestScore = score;
+        }
     }
 
     // Safari may wrap the evaluating view. Traverse only object-returning, selector-checked links from visible UI objects.
@@ -98,11 +113,22 @@ ICHTSafariPage *ICHTFindActiveSafariPage(NSError **error) {
         id object = queue[index];
         if (!object || [seen containsObject:object]) continue;
         [seen addObject:object];
-        if (ICHTCanEvaluateJavaScript(object)) return ICHTPageFromEvaluator(object, @"bounded-selector-walk");
+        if (ICHTCanEvaluateJavaScript(object)) {
+            NSInteger score = ICHTEvaluatorScore(object, wkWebView);
+            if (!bestEvaluator || score > bestScore) {
+                bestEvaluator = object;
+                bestStrategy = @"bounded-selector-walk";
+                bestScore = score;
+            }
+        }
         for (NSString *link in links) {
             id child = ICHTObjectValue(object, link);
             if (child && child != object && ![seen containsObject:child]) [queue addObject:child];
         }
+    }
+    if (bestEvaluator) {
+        ICHTLog(@"[PAGE] selected candidate score=%ld from %lu visible objects", (long)bestScore, (unsigned long)objects.count);
+        return ICHTPageFromEvaluator(bestEvaluator, bestStrategy);
     }
     NSString *detail = [NSString stringWithFormat:@"inspected %lu visible UI objects across %lu candidate windows", (unsigned long)objects.count, (unsigned long)orderedWindows.count];
     ICHTLog(@"[PAGE] not found: %@", detail);

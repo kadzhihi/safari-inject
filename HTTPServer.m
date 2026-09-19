@@ -3,6 +3,7 @@
 #import "JavaScriptEvaluator.h"
 #import "SafariPageFinder.h"
 #import <arpa/inet.h>
+#import <errno.h>
 #import <netinet/in.h>
 #import <sys/socket.h>
 #import <sys/time.h>
@@ -48,6 +49,7 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
     const uint8_t *cursor = bytes;
     while (length > 0) {
         ssize_t written = send(fd, cursor, length, 0);
+        if (written < 0 && errno == EINTR) continue;
         if (written <= 0) {
             ICHTLog(@"[HTTP] send failed %@", ICHTErrno());
             return NO;
@@ -138,9 +140,10 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
         ssize_t count = recv(fd, buffer, sizeof(buffer), 0);
         if (count <= 0) { *status = 408; *errorResponse = @{ @"ok": @NO, @"error": @"REQUEST_TIMEOUT_OR_DISCONNECT", @"detail": ICHTErrno() }; return NO; }
         [request appendBytes:buffer length:(NSUInteger)count];
-        if (request.length > ICHTMaxHeaderBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"HEADER_TOO_LARGE" }; return NO; }
         headerRange = [request rangeOfData:separator options:0 range:NSMakeRange(0, request.length)];
+        if (headerRange.location == NSNotFound && request.length > ICHTMaxHeaderBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"HEADER_TOO_LARGE" }; return NO; }
     }
+    if (headerRange.location > ICHTMaxHeaderBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"HEADER_TOO_LARGE" }; return NO; }
     NSString *headerText = [[NSString alloc] initWithData:[request subdataWithRange:NSMakeRange(0, headerRange.location)] encoding:NSUTF8StringEncoding];
     NSArray<NSString *> *lines = [headerText componentsSeparatedByString:@"\r\n"];
     NSArray<NSString *> *requestLine = [lines.firstObject componentsSeparatedByString:@" "];
