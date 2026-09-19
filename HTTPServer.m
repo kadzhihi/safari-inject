@@ -7,6 +7,7 @@
 #import <netinet/in.h>
 #import <sys/socket.h>
 #import <sys/time.h>
+#import <stdlib.h>
 #import <string.h>
 #import <stdint.h>
 #import <unistd.h>
@@ -161,9 +162,14 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
     NSString *contentLengthValue = headers[@"content-length"];
     if ([requestLine[0] isEqual:@"POST"] && !contentLengthValue) { *status = 400; *errorResponse = @{ @"ok": @NO, @"error": @"MISSING_CONTENT_LENGTH" }; return NO; }
     if (contentLengthValue) {
+        if (contentLengthValue.length == 0) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"INVALID_OR_TOO_LARGE_CONTENT_LENGTH" }; return NO; }
         NSCharacterSet *nonDigits = [NSCharacterSet decimalDigitCharacterSet].invertedSet;
-        unsigned long long parsedContentLength = [contentLengthValue unsignedLongLongValue];
-        if (!contentLengthValue.length || [contentLengthValue rangeOfCharacterFromSet:nonDigits].location != NSNotFound || parsedContentLength > ICHTMaxBodyBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"INVALID_OR_TOO_LARGE_CONTENT_LENGTH" }; return NO; }
+        if ([contentLengthValue rangeOfCharacterFromSet:nonDigits].location != NSNotFound) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"INVALID_OR_TOO_LARGE_CONTENT_LENGTH" }; return NO; }
+        const char *rawContentLength = [contentLengthValue UTF8String];
+        char *end = NULL;
+        errno = 0;
+        unsigned long long parsedContentLength = rawContentLength ? strtoull(rawContentLength, &end, 10) : 0;
+        if (!rawContentLength || errno == ERANGE || end == rawContentLength || *end != '\0' || parsedContentLength > (unsigned long long)ICHTMaxBodyBytes) { *status = 413; *errorResponse = @{ @"ok": @NO, @"error": @"INVALID_OR_TOO_LARGE_CONTENT_LENGTH" }; return NO; }
         contentLength = (NSUInteger)parsedContentLength;
     }
     NSUInteger bodyOffset = headerRange.location + separator.length;

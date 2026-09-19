@@ -1,6 +1,7 @@
 #import "JavaScriptEvaluator.h"
 #import "SafariPageFinder.h"
 #import <objc/message.h>
+#import <stdint.h>
 
 static NSDictionary *ICHTJavaScriptError(NSString *message) {
     return @{ @"ok": @NO, @"stage": @"javascript", @"error": message ?: @"Unknown JavaScript error" };

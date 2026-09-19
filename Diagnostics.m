@@ -1,6 +1,7 @@
 #import "Diagnostics.h"
 #import <UIKit/UIKit.h>
 #import <errno.h>
+#import <stdarg.h>
 #import <string.h>
 
 void ICHTLog(NSString *format, ...) {
