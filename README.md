@@ -80,3 +80,8 @@ The server binds only `127.0.0.1:17891`; it never listens on Wi-Fi, cellular, or
 ## Runtime status
 
 The source and GitHub workflow are statically reviewed. Actual tweak injection, Safari page discovery, and JavaScript execution are **NOT RUNTIME VERIFIED** until the supplied test is run on the stated iPhone.
+
+
+## 0.1.1 Clipboard ctor probe
+
+This diagnostic build writes `IOSCONTROL_SAFARI_CTOR_OK|...` to `UIPasteboard.generalPasteboard` at the very start of `%ctor`, before starting the HTTP server. The IOSControl test clears the pasteboard, launches MobileSafari, polls `clipText()`, then tests `/ping`. This separates injection/constructor failure from HTTP startup failure without relying on Safari container marker files.
