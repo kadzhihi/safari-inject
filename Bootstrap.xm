@@ -1,12 +1,10 @@
 #import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
 #import <dlfcn.h>
 #import <stdarg.h>
 
 // This is the only ElleKit-injected dylib.  It deliberately leaves all WebKit
 // and HTTP work to the payload after MobileSafari's main run loop is alive.
 typedef void (*ICHTPayloadStartFn)(void);
-static NSString * const ICHTStatusPrefix = @"IOSCONTROL_SAFARI_";
 
 static void ICHTBootstrapLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 
@@ -18,18 +16,11 @@ static void ICHTBootstrapLog(NSString *format, ...) {
     NSLog(@"[IOSControlSafariBootstrap] %@", message);
 }
 
-// The existing IOSControl runtime test can safely inspect this lightweight
-// diagnostic marker.  It is informational only; /ping remains the pass/fail
-// criterion and no UIKit work happens in the constructor path.
+// Diagnostics are intentionally limited to NSLog.  They never participate in
+// startup success and avoid touching clipboard/UI state from an injected dylib.
 static void ICHTSetBootstrapStatus(NSString *status) {
     if (![status isKindOfClass:NSString.class]) return;
-    void (^publish)(void) = ^{
-        NSString *value = [ICHTStatusPrefix stringByAppendingString:status];
-        [UIPasteboard generalPasteboard].string = value;
-        ICHTBootstrapLog(@"%@", value);
-    };
-    if (NSThread.isMainThread) publish();
-    else dispatch_async(dispatch_get_main_queue(), publish);
+    ICHTBootstrapLog(@"%@", status);
 }
 
 static BOOL ICHTIsMobileSafari(void) {

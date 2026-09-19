@@ -3,7 +3,6 @@
 -- It identifies the exact stage: bootstrap injection -> payload dlopen -> socket -> JS.
 
 local BASE = "http://127.0.0.1:17891"
-local PREFIX = "IOSCONTROL_SAFARI_"
 local TEST_URL = "https://example.com"
 local TMP_NAME = "__ioscontrol_safari_v2_tmp.txt"
 local TMP_PATH = "/var/mobile/Library/IOSControl/Scripts/" .. TMP_NAME
@@ -98,11 +97,6 @@ sleep(2)
 appRun("com.apple.mobilesafari")
 sleep(3)
 
-local diagnostic = clipText()
-if has(diagnostic, PREFIX) then
-    log("bootstrap_diagnostic=" .. tostring(diagnostic))
-end
-
 local safariProcess = shell("pgrep -x MobileSafari 2>&1")
 if tonumber(safariProcess) then
     pass("03 MOBILESAFARI PROCESS EXISTS")
@@ -162,23 +156,42 @@ if bridgeOK then
 ]])
     if status == 200 and has(tostring(body), "CREATED") then pass("08 CREATE DOM INPUT") else fail("08 CREATE DOM INPUT", body) end
 
+    body, status, data = httpGetJSON("/scan")
+    if status == 200 and type(data) == "table" and data.ok == true then
+        pass("09 SCAN DOM FIELDS")
+    else
+        fail("09 SCAN DOM FIELDS", "status=" .. tostring(status) .. " body=" .. tostring(body))
+    end
+
     local fillBody, fillStatus = httpPost(
         BASE .. "/fill",
         jsonEncode({ selector = "#ioscontrol_test", value = "ABC123456" }),
         { ["Content-Type"] = "application/json" }
     )
     local fillData = decode(fillBody)
-    if fillStatus == 200 and type(fillData) == "table" and fillData.ok == true then pass("09 FILL DOM INPUT") else fail("09 FILL DOM INPUT", fillBody) end
+    if fillStatus == 200 and type(fillData) == "table" and fillData.ok == true then pass("10 FILL DOM INPUT") else fail("10 FILL DOM INPUT", fillBody) end
 
     body, status, data = httpPostText("/eval", "document.querySelector('#ioscontrol_test').value")
     local value = resultValue(data, body)
-    if status == 200 and has(tostring(value), "ABC123456") then pass("10 VERIFY DOM VALUE") else fail("10 VERIFY DOM VALUE", tostring(body)) end
+    if status == 200 and has(tostring(value), "ABC123456") then pass("11 VERIFY DOM VALUE") else fail("11 VERIFY DOM VALUE", tostring(body)) end
+
+    fillBody, fillStatus = httpPost(
+        BASE .. "/fill",
+        jsonEncode({ selector = "[", value = "ignored" }),
+        { ["Content-Type"] = "application/json" }
+    )
+    fillData = decode(fillBody)
+    if fillStatus == 200 and type(fillData) == "table" and fillData.ok == false and fillData.error == "INVALID_SELECTOR" then
+        pass("12 INVALID SELECTOR")
+    else
+        fail("12 INVALID SELECTOR", fillBody)
+    end
 
     body, status, data = httpPostText("/eval", "(() => {")
     if status == 200 and type(data) == "table" and data.ok == false then
-        pass("11 INVALID JAVASCRIPT")
+        pass("13 INVALID JAVASCRIPT")
     else
-        fail("11 INVALID JAVASCRIPT", "status=" .. tostring(status) .. " body=" .. tostring(body))
+        fail("13 INVALID JAVASCRIPT", "status=" .. tostring(status) .. " body=" .. tostring(body))
     end
 
     local repeatOK = true
@@ -187,13 +200,13 @@ if bridgeOK then
         local v = resultValue(data, body)
         if status ~= 200 or tostring(v) ~= "2" then
             repeatOK = false
-            fail("12 REPEATED EVAL x5", "iteration=" .. tostring(i) .. " status=" .. tostring(status) .. " result=" .. tostring(v))
+            fail("14 REPEATED EVAL x5", "iteration=" .. tostring(i) .. " status=" .. tostring(status) .. " result=" .. tostring(v))
             break
         end
     end
-    if repeatOK then pass("12 REPEATED EVAL x5") end
+    if repeatOK then pass("14 REPEATED EVAL x5") end
 else
-    skip("05-12 SAFARI/JS TESTS", "bridge is not listening")
+    skip("05-14 SAFARI/JS TESTS", "bridge is not listening")
 end
 
 log("")
@@ -202,7 +215,6 @@ log("passed=" .. tostring(passed))
 log("failed=" .. tostring(failed))
 log("skipped=" .. tostring(skipped))
 log("first_failed_stage=" .. tostring(firstFailed or "NONE"))
-log("bootstrap_diagnostic=" .. tostring(diagnostic))
 if bridgeOK then
     log("RESULT=BRIDGE_RUNNING")
 else
