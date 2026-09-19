@@ -36,7 +36,7 @@ NSDictionary *ICHTEvaluateJavaScript(NSString *source, NSTimeInterval timeout) {
         id evaluator = page.webView;
         NSMethodSignature *signature = [evaluator methodSignatureForSelector:selector];
         if (!evaluator || ![evaluator respondsToSelector:selector] || !signature || signature.numberOfArguments != 4 || signature.methodReturnType[0] != 'v') {
-            if (!pageError) pageError = [NSError errorWithDomain:@"IOSControlSafariHTTP" code:3 userInfo:@{ NSLocalizedDescriptionKey: @"Selected Safari object cannot evaluate JavaScript" }];
+            if (!pageError) pageError = [NSError errorWithDomain:@"IOSControlSafariBridge" code:3 userInfo:@{ NSLocalizedDescriptionKey: @"Selected Safari object cannot evaluate JavaScript" }];
             return;
         }
         didStart = YES;

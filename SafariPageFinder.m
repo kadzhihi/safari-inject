@@ -67,7 +67,7 @@ static ICHTSafariPage *ICHTPageFromEvaluator(id evaluator, NSString *strategy) {
 
 ICHTSafariPage *ICHTFindActiveSafariPage(NSError **error) {
     if (!NSThread.isMainThread) {
-        if (error) *error = [NSError errorWithDomain:@"IOSControlSafariHTTP" code:2 userInfo:@{ NSLocalizedDescriptionKey: @"Safari page discovery must run on the main thread" }];
+        if (error) *error = [NSError errorWithDomain:@"IOSControlSafariBridge" code:2 userInfo:@{ NSLocalizedDescriptionKey: @"Safari page discovery must run on the main thread" }];
         return nil;
     }
     ICHTLog(@"[PAGE] searching");
@@ -132,6 +132,6 @@ ICHTSafariPage *ICHTFindActiveSafariPage(NSError **error) {
     }
     NSString *detail = [NSString stringWithFormat:@"inspected %lu visible UI objects across %lu candidate windows", (unsigned long)objects.count, (unsigned long)orderedWindows.count];
     ICHTLog(@"[PAGE] not found: %@", detail);
-    if (error) *error = [NSError errorWithDomain:@"IOSControlSafariHTTP" code:1 userInfo:@{ NSLocalizedDescriptionKey: detail }];
+    if (error) *error = [NSError errorWithDomain:@"IOSControlSafariBridge" code:1 userInfo:@{ NSLocalizedDescriptionKey: detail }];
     return nil;
 }

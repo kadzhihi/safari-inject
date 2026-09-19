@@ -9,7 +9,7 @@ void ICHTLog(NSString *format, ...) {
     va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
-    NSLog(@"[IOSControlSafariHTTP] %@", message);
+    NSLog(@"[IOSControlSafariBridge] %@", message);
 }
 
 NSString *ICHTErrno(void) {

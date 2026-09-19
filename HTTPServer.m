@@ -117,7 +117,7 @@ static const NSTimeInterval ICHTJavaScriptTimeout = 10;
 - (NSDictionary *)routeMethod:(NSString *)method path:(NSString *)path body:(NSData *)body status:(NSInteger *)status {
     *status = 200;
     if ([method isEqual:@"GET"] && [path isEqual:@"/ping"]) {
-        NSMutableDictionary *output = [@{ @"ok": @YES, @"bridge": @"IOSControlSafariHTTP", @"version": @"0.2.0", @"port": @17891 } mutableCopy];
+        NSMutableDictionary *output = [@{ @"ok": @YES, @"bridge": @"IOSControlSafariBridge", @"version": @"0.2.0", @"port": @17891 } mutableCopy];
         [output addEntriesFromDictionary:ICHTProcessInfo()];
         return output;
     }
